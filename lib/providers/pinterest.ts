@@ -108,20 +108,55 @@ export function parsePinterestResource(payload: unknown, id: string): ResolveRes
   return parsePinterest(`<script id="__PWS_INITIAL_PROPS__" type="application/json">${data}</script>`, `https://www.pinterest.com/pin/${id}/`);
 }
 
-async function resolveResource(id: string): Promise<ResolveResult> {
-  const url = new URL("https://www.pinterest.com/resource/PinResource/get/");
-  url.search = new URLSearchParams({ source_url: `/pin/${id}/`, data: JSON.stringify({ options: { id, field_set_key: "detailed" }, context: {} }) }).toString();
-  const response = await fetchAllowed(url.href, value => isPageUrl(value,"pinterest"), { headers: { "X-Pinterest-PWS-Handler": "www/pin/[id].js", "Accept": "application/json" } });
-  return parsePinterestResource(await readJson(response),id);
+const RESOURCE_FIELDS = ["detailed", "unauth_react_main_pin"];
+
+function shouldRetryPinterest(error: unknown): boolean {
+  return error instanceof DownloadError
+    ? error.code === "TIMEOUT" || error.code === "SOURCE_RETRYABLE" || (error.code === "SOURCE_UNAVAILABLE" && error.status === 429)
+    : error instanceof Error && (error.name === "TimeoutError" || error instanceof TypeError);
 }
 
-export async function resolvePinterest(sourceUrl: string): Promise<ResolveResult> {
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(signal.reason ?? new DOMException("Aborted", "AbortError")); return; }
+    const onAbort = () => { clearTimeout(timer); reject(signal?.reason ?? new DOMException("Aborted", "AbortError")); };
+    const timer = setTimeout(() => { signal?.removeEventListener("abort", onAbort); resolve(); }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+async function resolveResource(id: string, signal?: AbortSignal): Promise<ResolveResult> {
+  const url = new URL("https://www.pinterest.com/resource/PinResource/get/");
+  let lastError: unknown;
+  for (const fieldSet of RESOURCE_FIELDS) {
+    url.search = new URLSearchParams({ source_url: `/pin/${id}/`, data: JSON.stringify({ options: { id, field_set_key: fieldSet, noCache: true }, context: {} }) }).toString();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
+      try {
+        const response = await fetchAllowed(url.href, value => isPageUrl(value,"pinterest"), {
+          signal,
+          headers: { "X-Pinterest-PWS-Handler": "www/pin/[id].js", "Accept": "application/json" },
+        });
+        return parsePinterestResource(await readJson(response),id);
+      } catch (error) {
+        lastError = error;
+        if (signal?.aborted || !shouldRetryPinterest(error)) break;
+        if (attempt === 0) await delay(300, signal);
+      }
+    }
+    if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
+  }
+  throw lastError ?? new DownloadError("Pinterest couldn't read this pin.", "SOURCE_UNAVAILABLE");
+}
+
+export async function resolvePinterest(sourceUrl: string, signal?: AbortSignal): Promise<ResolveResult> {
   const directId = new URL(sourceUrl).pathname.match(/\/pin\/(?:[^/]*--)?(\d+)/)?.[1];
   if (directId) {
-    try { return await resolveResource(directId); }
+    try { return await resolveResource(directId, signal); }
     catch { /* Some pins expose page data even when their resource is unavailable. */ }
   }
-  const response = await fetchAllowed(sourceUrl, url => isPageUrl(url, "pinterest"), { headers: { "Accept-Language": "en-US,en;q=0.9" } });
+  if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
+  const response = await fetchAllowed(sourceUrl, url => isPageUrl(url, "pinterest"), { signal, headers: { "Accept-Language": "en-US,en;q=0.9" } });
   const html = await readBoundedText(response);
   // pin.it occasionally serves an app-link interstitial instead of HTTP redirect.
   if (new URL(sourceUrl).hostname === "pin.it" && !/<link[^>]*rel=["']canonical["']/i.test(html)) {
@@ -132,7 +167,7 @@ export async function resolvePinterest(sourceUrl: string): Promise<ResolveResult
       let full = href;
       try { full = new URL(href).searchParams.get("url") ?? href; } catch { continue; }
       if (isPageUrl(full,"pinterest") && /\/pin\/(?:[^/]*--)?\d+/.test(full)) {
-        return resolvePinterest(full);
+        return resolvePinterest(full, signal);
       }
     }
   }
@@ -144,7 +179,7 @@ export async function resolvePinterest(sourceUrl: string): Promise<ResolveResult
         const attrs = attributes(match[0]);
         if (attrs.rel === "canonical" && attrs.href && isPageUrl(attrs.href,"pinterest")) redirectedId = attrs.href.match(/\/pin\/(?:[^/]*--)?(\d+)/)?.[1];
       }
-      if (redirectedId) return resolveResource(redirectedId);
+      if (redirectedId) return resolveResource(redirectedId, signal);
     }
     throw error;
   }

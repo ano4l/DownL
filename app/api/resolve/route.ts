@@ -23,7 +23,7 @@ export async function POST(request: Request) {
     try { body = JSON.parse(await readBoundedText(new Response(request.body), 5000)); }
     catch { throw new DownloadError("That link couldn't be read. Paste it again.", "INVALID_REQUEST", 400); }
     const { platform, url, id } = parsePostInput(body?.url);
-    const result = platform === "pinterest" ? await resolvePinterest(url.href) : platform === "twitter" ? await resolveTwitter(id!) : await resolveTikTok(url.href);
+    const result = platform === "pinterest" ? await resolvePinterest(url.href, request.signal) : platform === "twitter" ? await resolveTwitter(id!) : await resolveTikTok(url.href);
     return Response.json(result, { headers: { "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" } });
   } catch (error) { return errorResponse(error); }
 }

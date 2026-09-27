@@ -3,7 +3,8 @@ import { DownloadError } from "./errors";
 export const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
 
 export async function fetchAllowed(url: string, allowed: (url: string) => boolean, init: RequestInit = {}): Promise<Response> {
-  const signal = init.signal ?? AbortSignal.timeout(20_000);
+  const timeout = AbortSignal.timeout(20_000);
+  const signal = init.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
   let current = url;
   for (let hop = 0; hop < 6; hop++) {
     if (!allowed(current)) throw new DownloadError("The source returned an unsupported download location.", "UNSAFE_URL", 422);
@@ -18,7 +19,8 @@ export async function fetchAllowed(url: string, allowed: (url: string) => boolea
     }
     if (!response.ok) {
       await response.body?.cancel();
-      throw new DownloadError(response.status === 429 ? "The source is busy. Wait a moment and try again." : "This post is unavailable, private, or the source blocked the request.", "SOURCE_UNAVAILABLE", response.status === 429 ? 429 : 422);
+      const retryable = response.status === 429 || response.status >= 500;
+      throw new DownloadError(response.status === 429 ? "The source is busy. Wait a moment and try again." : "This post is unavailable, private, or the source blocked the request.", retryable && response.status >= 500 ? "SOURCE_RETRYABLE" : "SOURCE_UNAVAILABLE", retryable ? response.status : 422);
     }
     return response;
   }
