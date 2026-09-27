@@ -9,7 +9,7 @@ A phone-first Pinterest, X / Twitter and TikTok downloader built with Next.js, r
 1. Open the deployed site in Safari on iPhone or Chrome on Android.
 2. Tap **Get the app** for Add to Home Screen / Install instructions.
 3. Copy a post's link, paste it, and tap **Get media**.
-4. **Download video / image** saves directly through the browser. For the gallery, tap **Prepare to save to gallery**, then **Save to gallery / Share file**. That second tap opens the native file share sheet where supported.
+4. On iPhone, Pocket prepares supported files as soon as the preview appears; tap the single **Save video / image** button to open the iOS share sheet, then choose **Save Video** or **Save Image**. On Android and for files over 80 MB, the same button downloads directly.
 
 On iPhone, choose **Save Video** or **Save Image** in the share sheet. If unavailable, download to Files, open the file, and use Share. On Android, browser downloads go to Downloads; gallery apps may show them automatically, or you can move them to Pictures / Movies. Websites cannot silently write into a phone's gallery. Native share support and destinations depend on the browser and device.
 

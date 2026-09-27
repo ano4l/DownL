@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ArrowDown, Check, LoaderCircle, Share2, X } from "lucide-react";
+import { ArrowDown, LoaderCircle, Share2 } from "lucide-react";
 import type { MediaItem } from "@/lib/types";
 
 const MAX_MEMORY = 80 * 1024 * 1024;
@@ -29,11 +29,18 @@ export function MediaCard({ item, index, total }: { item: MediaItem; index: numb
 
   useEffect(() => () => { if (blobUrl) URL.revokeObjectURL(blobUrl); }, [blobUrl]);
 
+  useEffect(() => {
+    const isAppleMobile = /iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    if (!isAppleMobile || (variant.size && variant.size > MAX_MEMORY)) return;
+    const timer = window.setTimeout(() => { void prepare(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [variantId]);
+
   if (!variant) return null;
 
   async function prepare() {
     if (preparing || !variant) return;
-    if (variant.size && variant.size > MAX_MEMORY) { setMessage("This file is large. Use Download to save it directly to Files or Downloads."); return; }
+    if (variant.size && variant.size > MAX_MEMORY) { setMessage("This file is large. Download it directly to Files."); return; }
     const controller = new AbortController();
     active.current = controller;
     const request = ++generation.current;
@@ -42,7 +49,7 @@ export function MediaCard({ item, index, total }: { item: MediaItem; index: numb
       const response = await fetch(variant.downloadUrl, { signal: controller.signal });
       if (!response.ok) throw new Error(response.status === 410 ? "This link expired. Get the media again for a fresh download." : "Couldn’t prepare this file. Try the Download button.");
       const length = Number(response.headers.get("content-length")) || Number(response.headers.get("x-file-size")) || 0;
-      if (length > MAX_MEMORY) { await response.body?.cancel(); throw new Error("This file is large. Use Download to save it directly to Files or Downloads."); }
+      if (length > MAX_MEMORY) { await response.body?.cancel(); throw new Error("This file is large. Download it directly to Files."); }
       if (!response.body) throw new Error("Your browser couldn’t prepare this file. Use Download instead.");
       const reader = response.body.getReader();
       const chunks: ArrayBuffer[] = [];
@@ -52,7 +59,7 @@ export function MediaCard({ item, index, total }: { item: MediaItem; index: numb
           const { value, done } = await reader.read();
           if (done) break;
           size += value.byteLength;
-          if (size > MAX_MEMORY) { await reader.cancel(); throw new Error("This file is large. Use Download to save it directly to Files or Downloads."); }
+          if (size > MAX_MEMORY) { await reader.cancel(); throw new Error("This file is large. Download it directly to Files."); }
           chunks.push(value.slice().buffer as ArrayBuffer);
           if (generation.current === request) setProgress(length ? Math.min(100, Math.round(size / length * 100)) : null);
         }
@@ -61,9 +68,9 @@ export function MediaCard({ item, index, total }: { item: MediaItem; index: numb
       const prepared = new File(chunks, variant.filename, { type: variant.mimeType });
       const supported = typeof navigator.share === "function" && typeof navigator.canShare === "function" && navigator.canShare({ files: [prepared] });
       setFile(prepared); setBlobUrl(URL.createObjectURL(prepared)); setCanShare(supported);
-      setMessage(supported ? "Ready. Open the share sheet to choose where to save." : "Ready to download. Your browser doesn’t support sharing this file.");
+      setMessage(supported ? "Ready to save. Tap once to open the iPhone share sheet." : "Your browser can’t open the share sheet for this file. Download it instead.");
     } catch (error) {
-      if (generation.current === request && !controller.signal.aborted) setMessage(error instanceof Error ? error.message : "Couldn’t prepare this file. Try Download.");
+      if (generation.current === request && !controller.signal.aborted) setMessage(error instanceof Error ? error.message : "Couldn’t prepare this file. Download it instead.");
     } finally { if (generation.current === request) { active.current = null; setPreparing(false); } }
   }
 
@@ -80,17 +87,14 @@ export function MediaCard({ item, index, total }: { item: MediaItem; index: numb
     } catch { setMessage("Couldn’t open sharing. Use Download instead."); }
   }
 
-  function cancel() { generation.current += 1; active.current?.abort(); active.current = null; setPreparing(false); setProgress(null); setMessage("Preparation cancelled. You can still download directly."); }
-
   return <article className="media-card">
     <div className="media-preview">{item.type === "video" ? <video key={variant.id} controls playsInline preload="metadata" poster={item.thumbnail} src={variant.url} /> : <img src={variant.url} alt={`Image ${index + 1} from this post`} loading="lazy" />}</div>
     <div className="media-controls">
       <div className="media-topline"><span className="eyebrow">{item.type === "video" ? "Video" : "Image"}{total > 1 ? ` ${index + 1} of ${total}` : ""}</span>{variant.size ? <span className="muted">{(variant.size / 1024 / 1024).toFixed(1)} MB</span> : null}</div>
       {item.variants.length > 1 ? <label className="quality-label">Quality<select aria-label={`Quality for ${item.type} ${index + 1}`} value={variant.id} onChange={(event) => setVariantId(event.target.value)} disabled={sharing}>{item.variants.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select></label> : <p className="quality-note">{variant.label} · {item.type === "video" ? "MP4" : variant.mimeType.split("/")[1].toUpperCase()}</p>}
-      <a className="button primary download-button" href={variant.downloadUrl} download={variant.filename}><ArrowDown size={19} /> Download {item.type === "video" ? "video" : "image"}</a>
-      {preparing ? <button className="button secondary" onClick={cancel}><X size={18} /> Cancel preparation{progress !== null ? ` · ${progress}%` : ""}</button> : file && blobUrl ? canShare ? <button className="button secondary" disabled={sharing} onClick={share}>{sharing ? <LoaderCircle className="spin" size={18} /> : <Share2 size={18} />} {sharing ? "Opening share sheet…" : "Save to gallery / Share file"}</button> : <a className="button secondary" href={blobUrl} download={file.name}><Check size={18} /> Download prepared file</a> : <button className="button secondary" onClick={prepare}><Share2 size={18} /> Prepare to save to gallery</button>}
+      {preparing ? <button className="button primary download-button" disabled><LoaderCircle className="spin" size={19} /> Preparing {item.type === "video" ? "video" : "image"}{progress !== null ? ` · ${progress}%` : ""}</button> : file && blobUrl && canShare ? <button className="button primary download-button" disabled={sharing} onClick={share}>{sharing ? <LoaderCircle className="spin" size={19} /> : <Share2 size={19} />} {sharing ? "Opening Save options…" : `Save ${item.type === "video" ? "video" : "image"}`}</button> : <a className="button primary download-button" href={file && blobUrl ? blobUrl : variant.downloadUrl} download={file?.name ?? variant.filename}><ArrowDown size={19} /> Download {item.type === "video" ? "video" : "image"}</a>}
       {preparing ? <div className="prepare-progress" role="progressbar" aria-label="Preparing file" aria-valuenow={progress ?? undefined} aria-valuemin={0} aria-valuemax={100}><span className={progress === null ? "indeterminate" : ""} style={{ width: progress === null ? "35%" : `${progress}%` }} /></div> : null}
-      <p className="media-message" role="status">{message || "Download directly, or prepare the file to open your phone’s share sheet."}</p>
+      <p className="media-message" role="status">{message || (preparing ? "Getting your file ready…" : "Choose a quality, then save your media.")}</p>
     </div>
   </article>;
 }
